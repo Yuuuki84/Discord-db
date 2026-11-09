@@ -11,3 +11,22 @@
     }
   ]
 }
+
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "discord-db",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-09",
+
+  "observability": {
+    "enabled": true
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "discord-schedule-db",
+      "database_id": "現在設定しているDatabase ID"
+    }
+  ]
+}
