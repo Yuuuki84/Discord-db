@@ -50,4 +50,4 @@ async function verifyDiscordRequest(request, publicKey) {
     console.log("Verification error:", error.message);
     return false;
   }
-}
+};
