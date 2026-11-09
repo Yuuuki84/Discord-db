@@ -115,14 +115,100 @@ export default {
       if (interaction.type === 2) {
         if (interaction.data.name === "schedule") {
           return Response.json({
-            type: 4,
+            type: 9,
             data: {
-              content: "日程調整コマンドを受け付けました。作成機能は次の工程で実装します。"
+              custom_id: "schedule_create",
+              title: "日程調整を作成",
+              components: [
+                {
+                  type: 1,
+                  components: [
+                    {
+                      type: 4,
+                      custom_id: "title",
+                      style: 1,
+                      label: "イベント名",
+                      placeholder: "例：週末の食事会",
+                      min_length: 1,
+                      max_length: 100,
+                      required: true
+                    }
+                  ]
+                },
+                {
+                  type: 1,
+                  components: [
+                    {
+                      type: 4,
+                      custom_id: "description",
+                      style: 2,
+                      label: "イベント説明",
+                      placeholder: "開催目的や連絡事項など",
+                      max_length: 1000,
+                      required: false
+                    }
+                  ]
+                },
+                {
+                  type: 1,
+                  components: [
+                    {
+                      type: 4,
+                      custom_id: "candidate_dates",
+                      style: 2,
+                      label: "候補日（1行につき1日）",
+                      placeholder: "2026-11-14\n2026-11-15\n2026-11-21",
+                      min_length: 10,
+                      max_length: 500,
+                      required: true
+                    }
+                  ]
+                },
+                {
+                  type: 1,
+                  components: [
+                    {
+                      type: 4,
+                      custom_id: "deadline",
+                      style: 1,
+                      label: "回答期限",
+                      placeholder: "例：2026-11-12 23:59",
+                      max_length: 30,
+                      required: false
+                    }
+                  ]
+                }
+              ]
             }
           });
         }
       }
 
+      // モーダル送信
+      if (interaction.type === 5) {
+        const fields = {};
+
+        for (const row of interaction.data.components) {
+          for (const component of row.components) {
+            fields[component.custom_id] = component.value;
+          }
+        }
+
+        return Response.json({
+          type: 4,
+          data: {
+            content:
+              `日程調整フォームの受信に成功しました。\n\n` +
+              `**イベント名：** ${fields.title}\n` +
+              `**説明：** ${fields.description || "なし"}\n` +
+              `**候補日：**\n${fields.candidate_dates}\n` +
+              `**回答期限：** ${fields.deadline || "未設定"}`,
+            flags: 64
+          }
+        });
+      }
+
+      // 未対応の操作
       return Response.json({
         type: 4,
         data: {
