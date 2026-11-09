@@ -2,7 +2,7 @@
 // ============================================================
 // Discord Schedule Bot
 // Cloudflare Workers + D1
-// Web Calendar + Discord Embed Edition
+// Web Calendar + Discord Components V2 Edition
 // ============================================================
 
 // ------------------------------------------------------------
@@ -387,86 +387,174 @@ async function getScheduleSummary(env, scheduleId) {
 }
 
 // ------------------------------------------------------------
-// 公開投稿 Embed の生成
+// 公開投稿 Components V2 の生成
 // ------------------------------------------------------------
 
 async function buildScheduleMessage(env, scheduleId) {
   const { schedule, dates, maxYes, winners } =
     await getScheduleSummary(env, scheduleId);
 
+  // Components V2：Text Display
+  function textDisplay(content) {
+    return {
+      type: 10,
+      content
+    };
+  }
+
+  // Components V2：Container
+  function container(accentColor, components) {
+    return {
+      type: 17,
+      accent_color: accentColor,
+      components
+    };
+  }
+
+  const components = [];
+
+  // ----------------------------------------------------------
+  // 1. イベント情報：淡いブルー
+  // ----------------------------------------------------------
+
+  const description = clipText(
+    schedule.description || "説明はありません。",
+    700
+  );
+
+  components.push(
+    container(0xE8EDF3, [
+      textDisplay(
+        `# 📅 ${clipText(schedule.title, 240)}\n\n${description}`
+      )
+    ])
+  );
+
+  // ----------------------------------------------------------
+  // 2. 最有力日程：淡いミントグリーン
+  // ----------------------------------------------------------
+
   const winnerText = winners.length
     ? winners.map(date => formatDate(date.candidate_date)).join("・")
     : "まだ回答がありません";
 
-  const description = [
-    clipText(schedule.description || "説明はありません。", 700),
-    "",
-    `🏆 **現在の最有力候補：${winnerText}**`,
-    maxYes > 0 ? `参加可能：**${maxYes}名**` : "参加可能の回答がまだありません。"
-  ].join("\n");
+  const winnerDescription = maxYes > 0
+    ? `参加可能：**${maxYes}名**`
+    : "参加可能の回答がまだありません。";
 
-  const fields = [];
+  components.push(
+    container(0xDCEFE2, [
+      textDisplay(
+        `## 最有力日程\n\n` +
+        `**${winnerText}**\n\n` +
+        `${winnerDescription}`
+      )
+    ])
+  );
 
-  // Discord Embedのフィールド数上限を考慮して24件まで表示
-  for (const date of dates.slice(0, 24)) {
-    const isWinner =
-      maxYes > 0 && date.counts["○"] === maxYes;
+  // ----------------------------------------------------------
+  // 3. 候補日一覧：淡いブルー
+  // 全候補日を表示。24件ごとにText Displayを分割し、
+  // 8ブロックごとにContainerを分割する。
+  // ----------------------------------------------------------
 
-    fields.push({
-      name: `${isWinner ? "🏆 " : "📅 "}${formatDate(date.candidate_date)}`,
-      value:
-        `🟢 ○ **${date.counts["○"]}**　` +
-        `🟡 △ **${date.counts["△"]}**　` +
-        `🔴 × **${date.counts["×"]}**`,
-      inline: true
+  const dateBlocks = [];
+
+  for (let i = 0; i < dates.length; i += 24) {
+    const chunk = dates.slice(i, i + 24);
+
+    const lines = chunk.map(date => {
+      const monthDay = formatDate(date.candidate_date);
+
+      return (
+        `**${monthDay}**　` +
+        `○ ${date.counts["○"]}名　` +
+        `△ ${date.counts["△"]}名　` +
+        `× ${date.counts["×"]}名`
+      );
     });
+
+    dateBlocks.push(
+      textDisplay(lines.join("\n"))
+    );
   }
 
-  if (dates.length > 24) {
-    fields.push({
-      name: "表示について",
-      value: `候補日は全${dates.length}件です。Discord上では先頭24件を表示しています。`,
-      inline: false
-    });
+  if (dateBlocks.length === 0) {
+    dateBlocks.push(
+      textDisplay("候補日が登録されていません。")
+    );
   }
 
-  const embed = {
-    title: `📅 ${clipText(schedule.title, 240)}`,
-    description: clipText(description, 4000),
-    color: 0x5865F2,
-    fields,
-    footer: {
-      text: `回答期限：${schedule.deadline || "未設定"} ｜ 未回答者は×に含まれません`
+  // Containerの子コンポーネント数を抑えるため8ブロック単位
+  for (let i = 0; i < dateBlocks.length; i += 8) {
+    const chunk = dateBlocks.slice(i, i + 8);
+    const candidateComponents = [];
+
+    if (i === 0) {
+      candidateComponents.push(
+        textDisplay("## 候補日と回答状況")
+      );
     }
-  };
 
-  return {
-    embeds: [embed],
+    candidateComponents.push(...chunk);
+
+    components.push(
+      container(0xE8EDF3, candidateComponents)
+    );
+  }
+
+  // ----------------------------------------------------------
+  // 4. 回答期限：淡いクリーム色
+  // ----------------------------------------------------------
+
+  components.push(
+    container(0xF6EAC8, [
+      textDisplay(
+        `回答期限：**${schedule.deadline || "未設定"}**\n` +
+        `未回答者は「×」には含まれません。`
+      )
+    ])
+  );
+
+  // ----------------------------------------------------------
+  // 5. ボタン
+  // 1段目：回答する
+  // 2段目：回答者確認・集計更新
+  // ----------------------------------------------------------
+
+  components.push({
+    type: 1,
     components: [
       {
-        type: 1,
-        components: [
-          {
-            type: 2,
-            style: 1,
-            label: "回答する",
-            custom_id: `respond:${scheduleId}`
-          },
-          {
-            type: 2,
-            style: 2,
-            label: "回答者確認",
-            custom_id: `answerers:${scheduleId}`
-          },
-          {
-            type: 2,
-            style: 3,
-            label: "集計更新",
-            custom_id: `refresh:${scheduleId}`
-          }
-        ]
+        type: 2,
+        style: 1,
+        label: "回答する",
+        custom_id: `respond:${scheduleId}`
       }
-    ],
+    ]
+  });
+
+  components.push({
+    type: 1,
+    components: [
+      {
+        type: 2,
+        style: 2,
+        label: "回答者確認",
+        custom_id: `answerers:${scheduleId}`
+      },
+      {
+        type: 2,
+        style: 3,
+        label: "集計更新",
+        custom_id: `refresh:${scheduleId}`
+      }
+    ]
+  });
+
+  return {
+    flags: 32768,
+    components,
     allowed_mentions: { parse: [] }
   };
 }
@@ -490,7 +578,13 @@ async function updateScheduleMessage(env, scheduleId) {
     env,
     `/channels/${messageInfo.channel_id}/messages/${messageInfo.message_id}`,
     "PATCH",
-    payload
+    {
+      flags: 32768,
+      content: null,
+      embeds: [],
+      components: payload.components,
+      allowed_mentions: { parse: [] }
+    }
   );
 }
 
