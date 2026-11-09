@@ -4,6 +4,10 @@
   "main": "src/index.js",
   "compatibility_date": "2026-11-09",
 
+  "vars": {
+    "DISCORD_PUBLIC_KEY": "d8a3b96d71b290a6914c582aeed2c52b8a5693c085f2900aa31e8de03d7991a9"
+  },
+
   "observability": {
     "enabled": true
   },
@@ -13,6 +17,7 @@
       "binding": "DB",
       "database_name": "discord-schedule-db",
       "database_id": "49edf126-3a60-4ca0-8b0a-e5417876c00e"
+
     }
   ]
 }
