@@ -60,11 +60,6 @@ export default {
     // スラッシュコマンド登録
     if (request.method === "POST" && url.pathname === "/register-commands") {
       const secret = request.headers.get("X-Command-Secret");
-      
-      if (!secret || secret !== env.COMMAND_REGISTER_SECRET) {
-      return new Response("Unauthorized", { status: 401 });
-    }
-      
 
       if (!secret || secret !== env.COMMAND_REGISTER_SECRET) {
         return new Response("Unauthorized", { status: 401 });
