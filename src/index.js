@@ -60,6 +60,7 @@ export default {
     // スラッシュコマンド登録
     if (request.method === "POST" && url.pathname === "/register-commands") {
       const secret = request.headers.get("X-Command-Secret");
+      console.log("Worker environment keys:", Object.keys(env));
       const savedSecret = env.COMMAND_REGISTER_SECRET;
       
       return Response.json({
