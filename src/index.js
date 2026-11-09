@@ -1,3 +1,4 @@
+
 // ============================================================
 // Discord Schedule Bot
 // Cloudflare Workers + D1
@@ -25,9 +26,7 @@ async function verifyDiscordRequest(request, publicKey) {
 
     const body = await request.clone().arrayBuffer();
     const timestampBytes = new TextEncoder().encode(timestamp);
-    const message = new Uint8Array(
-      timestampBytes.length + body.byteLength
-    );
+    const message = new Uint8Array(timestampBytes.length + body.byteLength);
 
     message.set(timestampBytes);
     message.set(new Uint8Array(body), timestampBytes.length);
@@ -45,7 +44,11 @@ async function verifyDiscordRequest(request, publicKey) {
 }
 
 function hexToBytes(hex) {
-  if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2 !== 0) {
+  if (
+    typeof hex !== "string" ||
+    !/^[0-9a-f]+$/i.test(hex) ||
+    hex.length % 2 !== 0
+  ) {
     throw new Error("Invalid hex");
   }
 
@@ -59,7 +62,9 @@ function hexToBytes(hex) {
 // ------------------------------------------------------------
 
 function isValidMonthDay(value) {
-  if (!/^\d{2}-\d{2}$/.test(value)) return false;
+  if (typeof value !== "string" || !/^\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
 
   const [month, day] = value.split("-").map(Number);
   const year = new Date().getUTCFullYear();
@@ -73,6 +78,10 @@ function isValidMonthDay(value) {
 }
 
 function generateCandidateDates(start, end) {
+  if (!isValidMonthDay(start) || !isValidMonthDay(end)) {
+    return null;
+  }
+
   const startDate = new Date(
     Date.UTC(
       2000,
@@ -89,6 +98,7 @@ function generateCandidateDates(start, end) {
     )
   );
 
+  // 年をまたぐ日程には現在のDB構造では未対応
   if (startDate > endDate) return null;
 
   const dates = [];
@@ -112,30 +122,24 @@ function formatDate(value) {
   return `${Number(month)}月${Number(day)}日`;
 }
 
-function getAnswerLabel(answer) {
-  const labels = {
-    yes: "○",
-    maybe: "△",
-    no: "×"
-  };
-
-  return labels[answer] || answer;
-}
-
 // ------------------------------------------------------------
 // Discord API
 // ------------------------------------------------------------
 
 async function discordRequest(env, path, method = "GET", body = null) {
+  if (!env.DISCORD_BOT_TOKEN) {
+    throw new Error("DISCORD_BOT_TOKEN is not configured");
+  }
+
   const response = await fetch(
     `https://discord.com/api/v10${path}`,
     {
       method,
       headers: {
-        "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}`,
+        Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
         "Content-Type": "application/json"
       },
-      ...(body ? { body: JSON.stringify(body) } : {})
+      ...(body !== null ? { body: JSON.stringify(body) } : {})
     }
   );
 
@@ -150,7 +154,6 @@ async function discordRequest(env, path, method = "GET", body = null) {
   return text ? JSON.parse(text) : null;
 }
 
-// Interactionへのフォローアップ
 async function sendFollowup(env, interaction, content) {
   const response = await fetch(
     `https://discord.com/api/v10/webhooks/${env.DISCORD_APPLICATION_ID}/${interaction.token}`,
@@ -190,6 +193,13 @@ function base64UrlEncode(bytes) {
 }
 
 function base64UrlDecode(value) {
+  if (
+    typeof value !== "string" ||
+    !/^[A-Za-z0-9_-]+$/.test(value)
+  ) {
+    throw new Error("Invalid base64url");
+  }
+
   const base64 = value
     .replace(/-/g, "+")
     .replace(/_/g, "/");
@@ -211,10 +221,7 @@ async function signCalendarPayload(payload, secret) {
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
-    {
-      name: "HMAC",
-      hash: "SHA-256"
-    },
+    { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"]
   );
@@ -250,7 +257,7 @@ async function createCalendarToken(env, scheduleId, guildId, userId) {
     exp: Math.floor(Date.now() / 1000) + 900
   };
 
-  return await signCalendarPayload(
+  return signCalendarPayload(
     payload,
     env.RESPONSE_TOKEN_SECRET
   );
@@ -269,10 +276,7 @@ async function verifyCalendarToken(env, token) {
     const key = await crypto.subtle.importKey(
       "raw",
       new TextEncoder().encode(env.RESPONSE_TOKEN_SECRET),
-      {
-        name: "HMAC",
-        hash: "SHA-256"
-      },
+      { name: "HMAC", hash: "SHA-256" },
       false,
       ["verify"]
     );
@@ -296,7 +300,7 @@ async function verifyCalendarToken(env, token) {
       !payload.scheduleId ||
       !payload.guildId ||
       !payload.userId ||
-      !payload.exp ||
+      !Number.isInteger(payload.exp) ||
       payload.exp < Math.floor(Date.now() / 1000)
     ) {
       return null;
@@ -310,7 +314,7 @@ async function verifyCalendarToken(env, token) {
 }
 
 // ------------------------------------------------------------
-// サーバー参加確認
+// Discordサーバー参加確認
 // ------------------------------------------------------------
 
 async function getGuildMember(env, guildId, userId) {
@@ -318,14 +322,12 @@ async function getGuildMember(env, guildId, userId) {
     `https://discord.com/api/v10/guilds/${guildId}/members/${userId}`,
     {
       headers: {
-        "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}`
+        Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`
       }
     }
   );
 
-  if (response.status === 404) {
-    return null;
-  }
+  if (response.status === 404) return null;
 
   if (!response.ok) {
     const text = await response.text();
@@ -335,7 +337,7 @@ async function getGuildMember(env, guildId, userId) {
     );
   }
 
-  return await response.json();
+  return response.json();
 }
 
 // ------------------------------------------------------------
@@ -363,10 +365,7 @@ async function buildScheduleMessage(env, scheduleId) {
   const dates = datesResult.results || [];
 
   const responseResult = await env.DB.prepare(`
-    SELECT
-      date_id,
-      answer,
-      COUNT(*) AS total
+    SELECT date_id, answer, COUNT(*) AS total
     FROM responses
     WHERE schedule_id = ?
     GROUP BY date_id, answer
@@ -408,6 +407,12 @@ async function buildScheduleMessage(env, scheduleId) {
   content +=
     `\n**回答期限：** ${schedule.deadline || "未設定"}\n` +
     `\n※ 未回答者は×に含まれません。`;
+
+  // Discordメッセージ上限2,000文字への対応
+  if (content.length > 1900) {
+    content = content.slice(0, 1850) +
+      "\n\n※ 表示内容を文字数上限に合わせて省略しています。";
+  }
 
   return content;
 }
@@ -461,6 +466,10 @@ async function createSchedule(env, interaction, fields) {
     fields.end_date
   );
 
+  if (!candidateDates || candidateDates.length > 366) {
+    throw new Error("Invalid candidate dates");
+  }
+
   const scheduleId = crypto.randomUUID();
   const guildId = interaction.guild_id || env.DISCORD_GUILD_ID;
 
@@ -475,13 +484,8 @@ async function createSchedule(env, interaction, fields) {
   const statements = [
     env.DB.prepare(`
       INSERT INTO schedules (
-        id,
-        guild_id,
-        title,
-        description,
-        deadline,
-        creator_id,
-        status
+        id, guild_id, title, description,
+        deadline, creator_id, status
       )
       VALUES (?, ?, ?, ?, ?, ?, 'open')
     `).bind(
@@ -494,22 +498,32 @@ async function createSchedule(env, interaction, fields) {
     )
   ];
 
-  for (let i = 0; i < candidateDates.length; i++) {
+  // 100日単位に分割してD1へ登録
+  for (let i = 0; i < candidateDates.length; i += 100) {
+    const chunk = candidateDates.slice(i, i + 100);
+
+    const placeholders = chunk
+      .map(() => "(?, ?, ?, ?)")
+      .join(", ");
+
+    const values = [];
+
+    for (let j = 0; j < chunk.length; j++) {
+      values.push(
+        crypto.randomUUID(),
+        scheduleId,
+        chunk[j],
+        i + j + 1
+      );
+    }
+
     statements.push(
       env.DB.prepare(`
         INSERT INTO schedule_dates (
-          id,
-          schedule_id,
-          candidate_date,
-          sort_order
+          id, schedule_id, candidate_date, sort_order
         )
-        VALUES (?, ?, ?, ?)
-      `).bind(
-        crypto.randomUUID(),
-        scheduleId,
-        candidateDates[i],
-        i + 1
-      )
+        VALUES ${placeholders}
+      `).bind(...values)
     );
   }
 
@@ -542,9 +556,7 @@ async function createSchedule(env, interaction, fields) {
 
   await env.DB.prepare(`
     INSERT INTO schedule_messages (
-      schedule_id,
-      channel_id,
-      message_id
+      schedule_id, channel_id, message_id
     )
     VALUES (?, ?, ?)
   `).bind(
@@ -633,24 +645,6 @@ async function showCalendarLink(env, interaction, scheduleId, requestUrl) {
 }
 
 // ------------------------------------------------------------
-// HTMLエスケープ
-// ------------------------------------------------------------
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, character => {
-    const entities = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    };
-
-    return entities[character];
-  });
-}
-
-// ------------------------------------------------------------
 // カレンダー画面のHTML生成
 // ------------------------------------------------------------
 
@@ -681,7 +675,6 @@ async function renderCalendarPage(env, scheduleId, token) {
     );
   }
 
-  // 現在もDiscordサーバーに所属しているか確認
   const member = await getGuildMember(
     env,
     claims.guildId,
@@ -706,10 +699,7 @@ async function renderCalendarPage(env, scheduleId, token) {
       AND r.user_id = ?
     WHERE sd.schedule_id = ?
     ORDER BY sd.sort_order
-  `).bind(
-    claims.userId,
-    scheduleId
-  ).all();
+  `).bind(claims.userId, scheduleId).all();
 
   const year = Number(
     String(schedule.created_at || "").slice(0, 4)
@@ -726,10 +716,9 @@ async function renderCalendarPage(env, scheduleId, token) {
   });
 
   if (dates.length === 0) {
-    return new Response(
-      "候補日が登録されていません。",
-      { status: 404 }
-    );
+    return new Response("候補日が登録されていません。", {
+      status: 404
+    });
   }
 
   const username =
@@ -747,7 +736,7 @@ async function renderCalendarPage(env, scheduleId, token) {
     dates
   };
 
-  // scriptタグ終端などの混入を防止
+  // HTML内のscriptへの不正なデータ埋め込みを防止
   const safePageData = JSON.stringify(pageData)
     .replace(/</g, "\\u003c")
     .replace(/>/g, "\\u003e")
@@ -765,38 +754,28 @@ async function renderCalendarPage(env, scheduleId, token) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>日程調整カレンダー</title>
-
 <style>
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
   padding: 20px;
   background: #f4f6f9;
   color: #252b35;
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .container {
   width: 100%;
   max-width: 620px;
   margin: 0 auto;
-  background: #ffffff;
+  background: #fff;
   border-radius: 16px;
   padding: 22px;
-  box-shadow: 0 4px 18px rgba(0,0,0,0.06);
+  box-shadow: 0 4px 18px rgba(0,0,0,.06);
 }
 
-h1 {
-  font-size: 23px;
-  margin: 0 0 10px;
-}
+h1 { font-size: 23px; margin: 0 0 10px; }
 
 .description {
   color: #626b78;
@@ -819,14 +798,11 @@ h1 {
   margin-bottom: 15px;
 }
 
-.calendar-header h2 {
-  margin: 0;
-  font-size: 20px;
-}
+.calendar-header h2 { margin: 0; font-size: 20px; }
 
 .nav-button {
   border: 1px solid #d8dde5;
-  background: #ffffff;
+  background: #fff;
   border-radius: 8px;
   padding: 8px 14px;
   font-size: 16px;
@@ -834,7 +810,7 @@ h1 {
 }
 
 .nav-button:disabled {
-  opacity: 0.3;
+  opacity: .3;
   cursor: default;
 }
 
@@ -857,7 +833,7 @@ h1 {
   min-height: 62px;
   border: 1px solid #e1e5eb;
   border-radius: 9px;
-  background: #ffffff;
+  background: #fff;
   padding: 5px 2px;
   cursor: pointer;
   display: flex;
@@ -873,10 +849,7 @@ h1 {
   background: #fafbfc;
 }
 
-.day-number {
-  font-size: 13px;
-  color: #303946;
-}
+.day-number { font-size: 13px; color: #303946; }
 
 .day-answer {
   font-size: 20px;
@@ -884,32 +857,14 @@ h1 {
   line-height: 1;
 }
 
-.day.yes {
-  background: #e1f4e7;
-  border-color: #83c99a;
-}
+.day.yes { background: #e1f4e7; border-color: #83c99a; }
+.day.yes .day-answer { color: #188345; }
 
-.day.yes .day-answer {
-  color: #188345;
-}
+.day.maybe { background: #fff3d9; border-color: #e9c46c; }
+.day.maybe .day-answer { color: #a66b00; }
 
-.day.maybe {
-  background: #fff3d9;
-  border-color: #e9c46c;
-}
-
-.day.maybe .day-answer {
-  color: #a66b00;
-}
-
-.day.no {
-  background: #fce5e5;
-  border-color: #e3a0a0;
-}
-
-.day.no .day-answer {
-  color: #c13c3c;
-}
+.day.no { background: #fce5e5; border-color: #e3a0a0; }
+.day.no .day-answer { color: #c13c3c; }
 
 .legend {
   display: flex;
@@ -925,9 +880,7 @@ h1 {
   gap: 5px;
 }
 
-.legend strong {
-  font-size: 17px;
-}
+.legend strong { font-size: 17px; }
 
 .instructions {
   font-size: 12px;
@@ -943,16 +896,13 @@ h1 {
   border-radius: 10px;
   padding: 14px;
   background: #5865f2;
-  color: #ffffff;
+  color: #fff;
   font-size: 16px;
   font-weight: 700;
   cursor: pointer;
 }
 
-.save-button:disabled {
-  opacity: 0.55;
-  cursor: wait;
-}
+.save-button:disabled { opacity: .55; cursor: wait; }
 
 .message {
   margin-top: 13px;
@@ -961,41 +911,21 @@ h1 {
   white-space: pre-wrap;
 }
 
-.message.error {
-  color: #c13c3c;
-}
-
-.message.success {
-  color: #188345;
-}
+.message.error { color: #c13c3c; }
+.message.success { color: #188345; }
 
 @media (max-width: 420px) {
-  body {
-    padding: 10px;
-  }
-
-  .container {
-    padding: 14px;
-  }
-
-  .day {
-    min-height: 52px;
-  }
-
-  .day-answer {
-    font-size: 18px;
-  }
+  body { padding: 10px; }
+  .container { padding: 14px; }
+  .day { min-height: 52px; }
+  .day-answer { font-size: 18px; }
 }
 </style>
 </head>
-
 <body>
 <div class="container">
-
   <h1 id="title"></h1>
-
   <div id="description" class="description"></div>
-
   <div id="userInfo" class="user-info"></div>
 
   <div class="calendar-header">
@@ -1023,7 +953,6 @@ h1 {
   </button>
 
   <div id="message" class="message"></div>
-
 </div>
 
 <script>
@@ -1055,9 +984,7 @@ const message = document.getElementById("message");
 const saveButton = document.getElementById("saveButton");
 
 document.getElementById("title").textContent = APP_DATA.title;
-document.getElementById("description").textContent =
-  APP_DATA.description;
-
+document.getElementById("description").textContent = APP_DATA.description;
 document.getElementById("userInfo").textContent =
   "回答者：" + APP_DATA.username;
 
@@ -1092,7 +1019,6 @@ function renderCalendar() {
 
   const firstDate = new Date(year, month - 1, 1);
   const firstDay = firstDate.getDay();
-
   const gridStart = new Date(year, month - 1, 1 - firstDay);
 
   for (let i = 0; i < 42; i++) {
@@ -1109,7 +1035,6 @@ function renderCalendar() {
     const number = document.createElement("span");
     number.className = "day-number";
     number.textContent = date.getDate();
-
     button.appendChild(number);
 
     if (candidate) {
@@ -1118,16 +1043,11 @@ function renderCalendar() {
       const answerElement = document.createElement("span");
       answerElement.className = "day-answer";
       answerElement.textContent = answer;
-
       button.appendChild(answerElement);
 
-      if (answer === "○") {
-        button.classList.add("yes");
-      } else if (answer === "△") {
-        button.classList.add("maybe");
-      } else if (answer === "×") {
-        button.classList.add("no");
-      }
+      if (answer === "○") button.classList.add("yes");
+      else if (answer === "△") button.classList.add("maybe");
+      else if (answer === "×") button.classList.add("no");
 
       button.setAttribute(
         "aria-label",
@@ -1160,7 +1080,6 @@ function renderCalendar() {
 
 function moveMonth(amount) {
   const [year, month] = currentMonth.split("-").map(Number);
-
   const date = new Date(year, month - 1 + amount, 1);
 
   currentMonth =
@@ -1214,12 +1133,16 @@ saveButton.addEventListener("click", async () => {
     }
 
     if (result.warning) {
+      // 外側のHTMLテンプレート内なので \\n とする
       showMessage(
-        "回答は保存されました。\n" + result.warning,
+        "回答は保存されました。\\n" + result.warning,
         "error"
       );
     } else {
-      showMessage("回答を保存しました。Discordの集計にも反映されました。", "success");
+      showMessage(
+        "回答を保存しました。Discordの集計にも反映されました。",
+        "success"
+      );
     }
   } catch (error) {
     showMessage(error.message, "error");
@@ -1266,7 +1189,6 @@ async function saveCalendarAnswers(env, request, scheduleId) {
   }
 
   const token = authorization.slice(7);
-
   const claims = await verifyCalendarToken(env, token);
 
   if (!claims || claims.scheduleId !== scheduleId) {
@@ -1293,7 +1215,6 @@ async function saveCalendarAnswers(env, request, scheduleId) {
     );
   }
 
-  // 保存時にも現在のサーバー参加状況を確認
   const member = await getGuildMember(
     env,
     claims.guildId,
@@ -1318,14 +1239,14 @@ async function saveCalendarAnswers(env, request, scheduleId) {
     );
   }
 
-  const answers = body.answers;
-
-  if (!Array.isArray(answers) || answers.length > 366) {
+  if (!body || !Array.isArray(body.answers) || body.answers.length > 366) {
     return Response.json(
       { error: "回答データが不正です。" },
       { status: 400 }
     );
   }
+
+  const answers = body.answers;
 
   const validDatesResult = await env.DB.prepare(`
     SELECT id
@@ -1367,13 +1288,10 @@ async function saveCalendarAnswers(env, request, scheduleId) {
       DELETE FROM responses
       WHERE schedule_id = ?
         AND user_id = ?
-    `).bind(
-      scheduleId,
-      claims.userId
-    )
+    `).bind(scheduleId, claims.userId)
   ];
 
-  // SQLiteのバインド変数上限を考慮して150件ずつ登録
+  // 1回のINSERTにつき最大150件
   for (let i = 0; i < answers.length; i += 150) {
     const chunk = answers.slice(i, i + 150);
 
@@ -1408,19 +1326,15 @@ async function saveCalendarAnswers(env, request, scheduleId) {
     );
   }
 
-  // D1のbatchで削除と再登録をまとめて実行
+  // D1 batchで削除と再登録を実行
   await env.DB.batch(statements);
 
-  // Discordの公開集計を更新
   let warning = null;
 
   try {
     await updateScheduleMessage(env, scheduleId);
   } catch (error) {
-    console.log(
-      "Discord message update error:",
-      error.message
-    );
+    console.log("Discord message update error:", error.message);
 
     warning =
       "Discord側の集計更新に失敗しました。回答データ自体は保存されています。";
@@ -1439,8 +1353,8 @@ async function saveCalendarAnswers(env, request, scheduleId) {
 function getModalFields(interaction) {
   const fields = {};
 
-  for (const row of interaction.data.components) {
-    for (const component of row.components) {
+  for (const row of interaction.data?.components || []) {
+    for (const component of row.components || []) {
       fields[component.custom_id] = component.value;
     }
   }
@@ -1456,23 +1370,12 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // --------------------------------------------------------
     // 動作確認
-    // --------------------------------------------------------
-
-    if (
-      request.method === "GET" &&
-      url.pathname === "/"
-    ) {
-      return new Response(
-        "Discord Schedule Bot is running!"
-      );
+    if (request.method === "GET" && url.pathname === "/") {
+      return new Response("Discord Schedule Bot is running!");
     }
 
-    // --------------------------------------------------------
     // Webカレンダー表示
-    // --------------------------------------------------------
-
     if (
       request.method === "GET" &&
       url.pathname.startsWith("/calendar/")
@@ -1482,9 +1385,7 @@ export default {
       );
 
       if (!scheduleId || scheduleId.includes("/")) {
-        return new Response("Invalid schedule ID", {
-          status: 400
-        });
+        return new Response("Invalid schedule ID", { status: 400 });
       }
 
       try {
@@ -1503,10 +1404,7 @@ export default {
       }
     }
 
-    // --------------------------------------------------------
     // Webカレンダー回答保存
-    // --------------------------------------------------------
-
     if (
       request.method === "POST" &&
       url.pathname.startsWith("/api/calendar/")
@@ -1540,10 +1438,7 @@ export default {
       }
     }
 
-    // --------------------------------------------------------
     // スラッシュコマンド登録
-    // --------------------------------------------------------
-
     if (
       request.method === "POST" &&
       url.pathname === "/register-commands"
@@ -1554,9 +1449,7 @@ export default {
         !secret ||
         secret !== env.COMMAND_REGISTER_SECRET
       ) {
-        return new Response("Unauthorized", {
-          status: 401
-        });
+        return new Response("Unauthorized", { status: 401 });
       }
 
       const command = {
@@ -1570,7 +1463,7 @@ export default {
         {
           method: "PUT",
           headers: {
-            "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}`,
+            Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
             "Content-Type": "application/json"
           },
           body: JSON.stringify([command])
@@ -1587,10 +1480,7 @@ export default {
       });
     }
 
-    // --------------------------------------------------------
     // Discord Interaction
-    // --------------------------------------------------------
-
     if (
       request.method === "POST" &&
       url.pathname === "/interactions"
@@ -1601,10 +1491,9 @@ export default {
       );
 
       if (!valid) {
-        return new Response(
-          "Invalid request signature",
-          { status: 401 }
-        );
+        return new Response("Invalid request signature", {
+          status: 401
+        });
       }
 
       const interaction = await request.json();
@@ -1614,10 +1503,7 @@ export default {
         return Response.json({ type: 1 });
       }
 
-      // ------------------------------------------------------
       // スラッシュコマンド
-      // ------------------------------------------------------
-
       if (interaction.type === 2) {
         if (interaction.data.name === "schedule") {
           return Response.json({
@@ -1707,10 +1593,7 @@ export default {
         }
       }
 
-      // ------------------------------------------------------
       // モーダル送信
-      // ------------------------------------------------------
-
       if (interaction.type === 5) {
         const fields = getModalFields(interaction);
 
@@ -1736,21 +1619,18 @@ export default {
           fields.end_date
         );
 
-        if (
-          !candidateDates ||
-          candidateDates.length > 366
-        ) {
+        if (!candidateDates || candidateDates.length > 366) {
           return Response.json({
             type: 4,
             data: {
               content:
-                "候補日の開始日と終了日を確認してください。",
+                "候補日の開始日と終了日を確認してください。同じ年の範囲で指定してください。",
               flags: 64
             }
           });
         }
 
-        // 先に応答し、バックグラウンドで保存・公開
+        // 先にDiscordへ応答し、バックグラウンドで作成
         ctx.waitUntil(
           (async () => {
             try {
@@ -1766,10 +1646,7 @@ export default {
                 `日程調整をチャンネルに公開しました。\n予定ID：\`${scheduleId}\``
               );
             } catch (error) {
-              console.log(
-                "Schedule creation error:",
-                error.message
-              );
+              console.log("Schedule creation error:", error.message);
 
               try {
                 await sendFollowup(
@@ -1778,10 +1655,7 @@ export default {
                   "予定の保存または公開に失敗しました。管理者にお問い合わせください。"
                 );
               } catch (followupError) {
-                console.log(
-                  "Followup error:",
-                  followupError.message
-                );
+                console.log("Followup error:", followupError.message);
               }
             }
           })()
@@ -1793,18 +1667,12 @@ export default {
         });
       }
 
-      // ------------------------------------------------------
       // ボタン操作
-      // ------------------------------------------------------
-
       if (interaction.type === 3) {
         const customId = interaction.data.custom_id;
 
-        // Webカレンダーを開く
         if (customId.startsWith("respond:")) {
-          const scheduleId = customId.slice(
-            "respond:".length
-          );
+          const scheduleId = customId.slice("respond:".length);
 
           try {
             return await showCalendarLink(
@@ -1814,10 +1682,7 @@ export default {
               request.url
             );
           } catch (error) {
-            console.log(
-              "Calendar link error:",
-              error.message
-            );
+            console.log("Calendar link error:", error.message);
 
             return Response.json({
               type: 4,
@@ -1830,7 +1695,7 @@ export default {
           }
         }
 
-        // 旧式のdate / answer操作は廃止
+        // 旧式操作は廃止
         if (
           customId.startsWith("date:") ||
           customId.startsWith("answer:")
@@ -1846,10 +1711,6 @@ export default {
         }
       }
 
-      // ------------------------------------------------------
-      // 未対応の操作
-      // ------------------------------------------------------
-
       return Response.json({
         type: 4,
         data: {
@@ -1859,8 +1720,6 @@ export default {
       });
     }
 
-    return new Response("Not Found", {
-      status: 404
-    });
+    return new Response("Not Found", { status: 404 });
   }
 };
