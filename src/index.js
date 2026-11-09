@@ -48,6 +48,52 @@ function hexToBytes(hex) {
   );
 }
 
+// MM-DD形式の日付を検証
+function isValidMonthDay(value) {
+  if (!/^\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const [month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(2000, month - 1, day));
+
+  return (
+    date.getUTCFullYear() === 2000 &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+// 開始日から終了日までの候補日を生成
+function generateCandidateDates(start, end) {
+  const startDate = new Date(
+    Date.UTC(2000, Number(start.slice(0, 2)) - 1, Number(start.slice(3, 5)))
+  );
+
+  const endDate = new Date(
+    Date.UTC(2000, Number(end.slice(0, 2)) - 1, Number(end.slice(3, 5)))
+  );
+
+  if (startDate > endDate) {
+    return null;
+  }
+
+  const dates = [];
+
+  for (
+    let current = new Date(startDate);
+    current <= endDate;
+    current.setUTCDate(current.getUTCDate() + 1)
+  ) {
+    const month = String(current.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(current.getUTCDate()).padStart(2, "0");
+
+    dates.push(`${month}-${day}`);
+  }
+
+  return dates;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -128,7 +174,7 @@ export default {
                       custom_id: "title",
                       style: 1,
                       label: "イベント名",
-                      placeholder: "例：週末の食事会",
+                      placeholder: "例：年末忘年会",
                       min_length: 1,
                       max_length: 100,
                       required: true
@@ -154,12 +200,29 @@ export default {
                   components: [
                     {
                       type: 4,
-                      custom_id: "candidate_dates",
-                      style: 2,
-                      label: "候補日（1行につき1日）",
-                      placeholder: "2026-11-14\n2026-11-15\n2026-11-21",
-                      min_length: 10,
-                      max_length: 500,
+                      custom_id: "start_date",
+                      style: 1,
+                      label: "候補開始日（MM-DD）",
+                      placeholder: "12-15",
+                      value: "12-15",
+                      min_length: 5,
+                      max_length: 5,
+                      required: true
+                    }
+                  ]
+                },
+                {
+                  type: 1,
+                  components: [
+                    {
+                      type: 4,
+                      custom_id: "end_date",
+                      style: 1,
+                      label: "候補終了日（MM-DD）",
+                      placeholder: "12-31",
+                      value: "12-31",
+                      min_length: 5,
+                      max_length: 5,
                       required: true
                     }
                   ]
@@ -172,7 +235,7 @@ export default {
                       custom_id: "deadline",
                       style: 1,
                       label: "回答期限",
-                      placeholder: "例：2026-11-12 23:59",
+                      placeholder: "例：12-10 23:59",
                       max_length: 30,
                       required: false
                     }
@@ -194,18 +257,119 @@ export default {
           }
         }
 
-        return Response.json({
-          type: 4,
-          data: {
-            content:
-              `日程調整フォームの受信に成功しました。\n\n` +
-              `**イベント名：** ${fields.title}\n` +
-              `**説明：** ${fields.description || "なし"}\n` +
-              `**候補日：**\n${fields.candidate_dates}\n` +
-              `**回答期限：** ${fields.deadline || "未設定"}`,
-            flags: 64
+        // 入力値の検証
+        if (
+          !fields.title ||
+          !fields.start_date ||
+          !fields.end_date ||
+          !isValidMonthDay(fields.start_date) ||
+          !isValidMonthDay(fields.end_date)
+        ) {
+          return Response.json({
+            type: 4,
+            data: {
+              content: "入力内容を確認してください。日付は MM-DD 形式で指定してください。",
+              flags: 64
+            }
+          });
+        }
+
+        const candidateDates = generateCandidateDates(
+          fields.start_date,
+          fields.end_date
+        );
+
+        if (!candidateDates || candidateDates.length > 366) {
+          return Response.json({
+            type: 4,
+            data: {
+              content: "候補日の開始日と終了日を確認してください。",
+              flags: 64
+            }
+          });
+        }
+
+        // D1へ保存
+        try {
+          const scheduleId = crypto.randomUUID();
+          const guildId = interaction.guild_id || env.DISCORD_GUILD_ID;
+          const creatorId =
+            interaction.member?.user?.id ||
+            interaction.user?.id;
+
+          if (!guildId || !creatorId) {
+            throw new Error("Guild ID or creator ID is missing");
           }
-        });
+
+          const statements = [
+            env.DB.prepare(`
+              INSERT INTO schedules (
+                id,
+                guild_id,
+                title,
+                description,
+                deadline,
+                creator_id,
+                status
+              )
+              VALUES (?, ?, ?, ?, ?, ?, 'open')
+            `).bind(
+              scheduleId,
+              guildId,
+              fields.title,
+              fields.description || null,
+              fields.deadline || null,
+              creatorId
+            )
+          ];
+
+          for (let i = 0; i < candidateDates.length; i++) {
+            statements.push(
+              env.DB.prepare(`
+                INSERT INTO schedule_dates (
+                  id,
+                  schedule_id,
+                  candidate_date,
+                  sort_order
+                )
+                VALUES (?, ?, ?, ?)
+              `).bind(
+                crypto.randomUUID(),
+                scheduleId,
+                candidateDates[i],
+                i + 1
+              )
+            );
+          }
+
+          await env.DB.batch(statements);
+
+          return Response.json({
+            type: 4,
+            data: {
+              content:
+                `日程調整を作成し、データベースへ保存しました。\n\n` +
+                `**イベント名：** ${fields.title}\n` +
+                `**説明：** ${fields.description || "なし"}\n` +
+                `**候補期間：** ${fields.start_date} ～ ${fields.end_date}\n` +
+                `**候補日数：** ${candidateDates.length}日\n` +
+                `**回答期限：** ${fields.deadline || "未設定"}\n` +
+                `**予定ID：** \`${scheduleId}\``,
+              flags: 64
+            }
+          });
+
+        } catch (error) {
+          console.log("D1 save error:", error.message);
+
+          return Response.json({
+            type: 4,
+            data: {
+              content: "データベースへの保存に失敗しました。管理者にお問い合わせください。",
+              flags: 64
+            }
+          });
+        }
       }
 
       // 未対応の操作
