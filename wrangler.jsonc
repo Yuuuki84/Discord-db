@@ -3,20 +3,6 @@
   "name": "discord-db",
   "main": "src/index.js",
   "compatibility_date": "2026-11-09",
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "discord-schedule-db",
-      "database_id": "49edf126-3a60-4ca0-8b0a-e5417876c00e"
-    }
-  ]
-}
-
-{
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "discord-db",
-  "main": "src/index.js",
-  "compatibility_date": "2026-11-09",
 
   "observability": {
     "enabled": true
@@ -26,7 +12,7 @@
     {
       "binding": "DB",
       "database_name": "discord-schedule-db",
-      "database_id": "現在設定しているDatabase ID"
+      "database_id": "49edf126-3a60-4ca0-8b0a-e5417876c00e"
     }
   ]
 }
